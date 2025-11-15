@@ -56,6 +56,7 @@ except Exception:
         HAS_MPL = False
 
 from control import MotorParams, Gains, PMSMSim
+from control.bldc import MotorParamsBLDC, GainsBLDC, BLDCQSim
 
 
 class LivePlot(QWidget):
@@ -127,6 +128,19 @@ class MainWindow(QMainWindow):
         self.spin_vis = QDoubleSpinBox(); self.spin_vis.setRange(0.01, 0.5); self.spin_vis.setDecimals(3); self.spin_vis.setSingleStep(0.01); self.spin_vis.setValue(0.02)
         self.spin_tload = QDoubleSpinBox(); self.spin_tload.setRange(0.0, 5.0); self.spin_tload.setDecimals(4); self.spin_tload.setSingleStep(0.005); self.spin_tload.setValue(0.0)
 
+        # Motor/Control selection
+        sel_box = QGroupBox("Selection")
+        sel_row = QHBoxLayout(sel_box)
+        self.rb_pmsm = QtWidgets.QRadioButton("PMSM")
+        self.rb_bldc = QtWidgets.QRadioButton("BLDC")
+        self.rb_pmsm.setChecked(True)
+        self.rb_vec = QtWidgets.QRadioButton("Vector (FOC)")
+        self.rb_trap = QtWidgets.QRadioButton("Trapezoidal (six-step)")
+        self.rb_vec.setChecked(True)
+        self.rb_trap.setEnabled(False)  # Placeholder for future
+        for w in (self.rb_pmsm, self.rb_bldc, self.rb_vec, self.rb_trap):
+            sel_row.addWidget(w)
+
         motor_box = QGroupBox("Motor Params")
         mform = QFormLayout(motor_box)
         self.spin_R = QDoubleSpinBox(); self.spin_R.setRange(0.01, 50.0); self.spin_R.setDecimals(4); self.spin_R.setValue(0.5)
@@ -182,7 +196,7 @@ class MainWindow(QMainWindow):
         self.btn_save_preset = QPushButton("Save Preset…"); self.btn_load_preset = QPushButton("Load Preset…")
         preset_row = QHBoxLayout(); preset_row.addWidget(self.btn_save_preset); preset_row.addWidget(self.btn_load_preset)
 
-        left = QVBoxLayout(); left.addLayout(form); left.addWidget(motor_box); left.addWidget(gains_box); left.addLayout(row); left.addLayout(preset_row); left.addWidget(self.lbl)
+        left = QVBoxLayout(); left.addLayout(form); left.addWidget(sel_box); left.addWidget(motor_box); left.addWidget(gains_box); left.addLayout(row); left.addLayout(preset_row); left.addWidget(self.lbl)
         root = QHBoxLayout(cw); root.addLayout(left, 0); root.addWidget(self.plot, 1)
 
         # Menu bar (presets, exit)
@@ -200,7 +214,7 @@ class MainWindow(QMainWindow):
         m_file.addAction(act_exit)
 
         # Simulation objects
-        self.sim: Optional[PMSMSim] = None
+        self.sim: Optional[object] = None
         self.running = False
         self.t = 0.0
         self._csv_log = []
@@ -230,23 +244,37 @@ class MainWindow(QMainWindow):
                 self._load_preset_from_path(default_path)
                 self.lbl.setText(f"Loaded default preset: {default_path}")
 
-    def build_params(self) -> tuple[MotorParams, Gains]:
-        p = MotorParams(
-            R=self.spin_R.value(), Ld=self.spin_Ld.value(), Lq=self.spin_Lq.value(),
-            Kt=self.spin_Kt.value(), p=int(self.spin_p.value()), J=self.spin_J.value(),
-            B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value(),
-        )
-        g = Gains(
-            spd_kp=self.spin_spd_kp.value(), spd_ki=self.spin_spd_ki.value(),
-            id_kp=self.spin_id_kp.value(), id_ki=self.spin_id_ki.value(),
-            iq_kp=self.spin_iq_kp.value(), iq_ki=self.spin_iq_ki.value(),
-        )
-        return p, g
+    def build_params(self):
+        if self.rb_bldc.isChecked():
+            p = MotorParamsBLDC(
+                R=self.spin_R.value(), L=self.spin_Ld.value(), Kt=self.spin_Kt.value(), Ke=self.spin_Kt.value(),
+                J=self.spin_J.value(), B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value(),
+            )
+            g = GainsBLDC(
+                spd_kp=self.spin_spd_kp.value(), spd_ki=self.spin_spd_ki.value(),
+                cur_kp=self.spin_id_kp.value(), cur_ki=self.spin_id_ki.value(),
+            )
+            return p, g
+        else:
+            p = MotorParams(
+                R=self.spin_R.value(), Ld=self.spin_Ld.value(), Lq=self.spin_Lq.value(),
+                Kt=self.spin_Kt.value(), p=int(self.spin_p.value()), J=self.spin_J.value(),
+                B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value(),
+            )
+            g = Gains(
+                spd_kp=self.spin_spd_kp.value(), spd_ki=self.spin_spd_ki.value(),
+                id_kp=self.spin_id_kp.value(), id_ki=self.spin_id_ki.value(),
+                iq_kp=self.spin_iq_kp.value(), iq_ki=self.spin_iq_ki.value(),
+            )
+            return p, g
 
     def on_start(self):
         if self.sim is None:
             p, g = self.build_params()
-            self.sim = PMSMSim(p, g)
+            if self.rb_bldc.isChecked():
+                self.sim = BLDCQSim(p, g)
+            else:
+                self.sim = PMSMSim(p, g)
         # Apply refs
         self.sim.id_ref = self.spin_idref.value()
         self.running = True
@@ -376,17 +404,23 @@ class MainWindow(QMainWindow):
 
         last = None
         for _ in range(steps):
-            omega, id_, iq_, vd, vq, Te, vmag = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
-            self.t += dt
-            last = (self.t, omega, id_, iq_, vd, vq, Te, vmag)
-            # Log every step; for large runs, consider thinning
-            self._csv_log.append((self.t, omega, omega * 60.0 / (2.0 * 3.141592653589793), iq_, id_, vd, vq, Te, vmag))
+            if isinstance(self.sim, PMSMSim):
+                omega, id_, iq_, vd, vq, Te, vmag = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
+                self.t += dt
+                last = (self.t, omega, id_, iq_, vd, vq, Te, vmag)
+                self._csv_log.append((self.t, omega, omega * 60.0 / (2.0 * 3.141592653589793), iq_, id_, vd, vq, Te, vmag))
+            else:
+                omega, i, v, Te = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
+                self.t += dt
+                rpm = omega * 60.0 / (2.0 * 3.141592653589793)
+                last = (self.t, omega, 0.0, i, 0.0, v, Te, abs(v))
+                self._csv_log.append((self.t, omega, rpm, i, 0.0, 0.0, v, Te, abs(v)))
 
         if last is not None:
-            t, omega, id_, iq_, vd, vq, Te, vmag = last
+            t, omega, id_or0, iq_or_i, vd_or0, vq_or_v, Te, vmag = last
             rpm = omega * 60.0 / (2.0 * 3.141592653589793)
-            self.plot.append(t, rpm, iq_)
-            self.lbl.setText(f"t={t:.2f}s rpm={rpm:.0f} iq={iq_:.2f}A Te={Te:.3f}N·m |v|={vmag:.1f}V")
+            self.plot.append(t, rpm, iq_or_i)
+            self.lbl.setText(f"t={t:.2f}s rpm={rpm:.0f} I/iq={iq_or_i:.2f}A Te={Te:.3f}N·m |v|={vmag:.1f}V")
 
 
 def main() -> int:

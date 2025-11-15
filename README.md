@@ -25,9 +25,11 @@ Run Qt UI:
 
 Realtime UI:
 - `python realtime_ui.py` for live simulation and plotting.
+  - Motor: select PMSM (dq model) or BLDC (q-axis model).
+  - Control: Vector (FOC) supported; trapezoidal planned.
   - Plotting: uses `pyqtgraph` (fast) if available, else falls back to `matplotlib`.
-  - Controls: start/pause/reset, speed/torque mode, d‑axis current, load torque.
-  - FOC gains: tune Speed/Id/Iq PI gains directly in the UI.
+  - Controls: start/pause/reset, speed/torque mode, d‑axis current (PMSM), load torque.
+  - FOC gains: tune Speed/Id/Iq PI gains directly in the UI (BLDC uses Speed/Current).
   - Presets: save/load motor and gain profiles as JSON.
   - Update rate set by "UI period"; plant integrates at smaller dt.
   - Startup preset: `python realtime_ui.py --preset presets/default_spmsm.json`.
