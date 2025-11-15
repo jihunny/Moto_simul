@@ -17,6 +17,8 @@ from __future__ import annotations
 import sys
 from typing import Optional
 import time
+import os
+import argparse
 
 try:
     from PySide6 import QtWidgets
@@ -110,7 +112,7 @@ class LivePlot(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, preset_path: Optional[str] = None):
         super().__init__()
         self.setWindowTitle("Realtime PMSM dq‑FOC Sim")
         cw = QWidget(self); self.setCentralWidget(cw)
@@ -183,6 +185,20 @@ class MainWindow(QMainWindow):
         left = QVBoxLayout(); left.addLayout(form); left.addWidget(motor_box); left.addWidget(gains_box); left.addLayout(row); left.addLayout(preset_row); left.addWidget(self.lbl)
         root = QHBoxLayout(cw); root.addLayout(left, 0); root.addWidget(self.plot, 1)
 
+        # Menu bar (presets, exit)
+        menubar = self.menuBar()
+        m_file = menubar.addMenu("File")
+        act_load = QtWidgets.QAction("Load Preset…", self)
+        act_save = QtWidgets.QAction("Save Preset…", self)
+        act_load_default = QtWidgets.QAction("Load Default Preset", self)
+        act_exit = QtWidgets.QAction("Exit", self)
+        m_file.addAction(act_load)
+        m_file.addAction(act_save)
+        m_file.addSeparator()
+        m_file.addAction(act_load_default)
+        m_file.addSeparator()
+        m_file.addAction(act_exit)
+
         # Simulation objects
         self.sim: Optional[PMSMSim] = None
         self.running = False
@@ -199,6 +215,20 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self.on_export)
         self.btn_save_preset.clicked.connect(self.on_save_preset)
         self.btn_load_preset.clicked.connect(self.on_load_preset)
+        act_save.triggered.connect(self.on_save_preset)
+        act_load.triggered.connect(self.on_load_preset)
+        act_load_default.triggered.connect(self.on_load_default_preset)
+        act_exit.triggered.connect(self.close)
+
+        # Optional preset autoload
+        if preset_path:
+            self._load_preset_from_path(preset_path)
+        else:
+            # Auto-load default preset if present
+            default_path = os.path.join(os.path.dirname(__file__), "presets", "default_spmsm.json")
+            if os.path.exists(default_path):
+                self._load_preset_from_path(default_path)
+                self.lbl.setText(f"Loaded default preset: {default_path}")
 
     def build_params(self) -> tuple[MotorParams, Gains]:
         p = MotorParams(
@@ -256,6 +286,34 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.information(self, "Export CSV", f"Saved: {path}")
 
+    def _load_preset_from_path(self, path: str):
+        import json
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        m = d.get("motor", {})
+        self.spin_R.setValue(float(m.get("R", self.spin_R.value())))
+        self.spin_Ld.setValue(float(m.get("Ld", self.spin_Ld.value())))
+        self.spin_Lq.setValue(float(m.get("Lq", self.spin_Lq.value())))
+        self.spin_Kt.setValue(float(m.get("Kt", self.spin_Kt.value())))
+        self.spin_p.setValue(int(m.get("p", int(self.spin_p.value()))))
+        self.spin_J.setValue(float(m.get("J", self.spin_J.value())))
+        self.spin_B.setValue(float(m.get("B", self.spin_B.value())))
+        self.spin_V.setValue(float(m.get("Vbus", self.spin_V.value())))
+        self.spin_Imax.setValue(float(m.get("Imax", self.spin_Imax.value())))
+
+        g = d.get("gains", {})
+        self.spin_spd_kp.setValue(float(g.get("spd_kp", self.spin_spd_kp.value())))
+        self.spin_spd_ki.setValue(float(g.get("spd_ki", self.spin_spd_ki.value())))
+        self.spin_id_kp.setValue(float(g.get("id_kp", self.spin_id_kp.value())))
+        self.spin_id_ki.setValue(float(g.get("id_ki", self.spin_id_ki.value())))
+        self.spin_iq_kp.setValue(float(g.get("iq_kp", self.spin_iq_kp.value())))
+        self.spin_iq_ki.setValue(float(g.get("iq_ki", self.spin_iq_ki.value())))
+
+        t = d.get("targets", {})
+        self.spin_rpm.setValue(float(t.get("rpm", self.spin_rpm.value())))
+        self.spin_torque.setValue(float(t.get("torque", self.spin_torque.value())))
+        self.spin_idref.setValue(float(t.get("id_ref", self.spin_idref.value())))
+
     def _preset_dict(self):
         return {
             "motor": {
@@ -290,32 +348,18 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            import json
-            with open(path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            m = d.get("motor", {})
-            self.spin_R.setValue(float(m.get("R", self.spin_R.value())))
-            self.spin_Ld.setValue(float(m.get("Ld", self.spin_Ld.value())))
-            self.spin_Lq.setValue(float(m.get("Lq", self.spin_Lq.value())))
-            self.spin_Kt.setValue(float(m.get("Kt", self.spin_Kt.value())))
-            self.spin_p.setValue(int(m.get("p", int(self.spin_p.value()))))
-            self.spin_J.setValue(float(m.get("J", self.spin_J.value())))
-            self.spin_B.setValue(float(m.get("B", self.spin_B.value())))
-            self.spin_V.setValue(float(m.get("Vbus", self.spin_V.value())))
-            self.spin_Imax.setValue(float(m.get("Imax", self.spin_Imax.value())))
+            self._load_preset_from_path(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Load preset error", str(e))
 
-            g = d.get("gains", {})
-            self.spin_spd_kp.setValue(float(g.get("spd_kp", self.spin_spd_kp.value())))
-            self.spin_spd_ki.setValue(float(g.get("spd_ki", self.spin_spd_ki.value())))
-            self.spin_id_kp.setValue(float(g.get("id_kp", self.spin_id_kp.value())))
-            self.spin_id_ki.setValue(float(g.get("id_ki", self.spin_id_ki.value())))
-            self.spin_iq_kp.setValue(float(g.get("iq_kp", self.spin_iq_kp.value())))
-            self.spin_iq_ki.setValue(float(g.get("iq_ki", self.spin_iq_ki.value())))
-
-            t = d.get("targets", {})
-            self.spin_rpm.setValue(float(t.get("rpm", self.spin_rpm.value())))
-            self.spin_torque.setValue(float(t.get("torque", self.spin_torque.value())))
-            self.spin_idref.setValue(float(t.get("id_ref", self.spin_idref.value())))
+    def on_load_default_preset(self):
+        default_path = os.path.join(os.path.dirname(__file__), "presets", "default_spmsm.json")
+        if not os.path.exists(default_path):
+            QMessageBox.information(self, "Load Default Preset", "Default preset not found under presets/default_spmsm.json")
+            return
+        try:
+            self._load_preset_from_path(default_path)
+            self.lbl.setText(f"Loaded default preset: {default_path}")
         except Exception as e:
             QMessageBox.critical(self, "Load preset error", str(e))
 
@@ -346,8 +390,12 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Realtime PMSM dq‑FOC simulation UI")
+    parser.add_argument("--preset", type=str, default=None, help="Path to preset JSON to load on startup")
+    args = parser.parse_args()
+
     app = QApplication(sys.argv)
-    w = MainWindow(); w.resize(1100, 650); w.show()
+    w = MainWindow(preset_path=args.preset); w.resize(1100, 650); w.show()
     return app.exec()
 
 

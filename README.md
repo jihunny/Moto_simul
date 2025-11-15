@@ -30,6 +30,8 @@ Realtime UI:
   - FOC gains: tune Speed/Id/Iq PI gains directly in the UI.
   - Presets: save/load motor and gain profiles as JSON.
   - Update rate set by "UI period"; plant integrates at smaller dt.
+  - Startup preset: `python realtime_ui.py --preset presets/default_spmsm.json`.
+    If omitted, the app auto-loads `presets/default_spmsm.json` when present.
 
 Presets:
 - Example: `presets/default_spmsm.json`. Load it from the realtime UI (Load Preset…).
