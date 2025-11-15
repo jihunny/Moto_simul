@@ -21,6 +21,11 @@ Run Qt UI:
 - `python qt_ui.py`
 - Edit targets, motor params (R, L≈Ld=Lq, Kt, pole pairs p), and run.
 
+Realtime UI:
+- `python realtime_ui.py` for live simulation and plotting (Qt + Matplotlib).
+  - Controls: start/pause/reset, speed/torque mode, d‑axis current, load torque.
+  - Update rate set by "UI period"; plant integrates at smaller dt.
+
 ## Output
 - CSV columns: `t_s, omega_rad_s, speed_rpm, iq_a, iq_ref_a, v_mag_v, t_load_nm, speed_err, iq_err, id_a, id_ref_a, vd_v, vq_v, Te_nm`.
 - Console prints final speed, currents, voltage magnitude, and torque.
@@ -36,4 +41,6 @@ Run Qt UI:
 - Voltage is limited to `Vbus/√3` to mimic sine/SVPWM fundamental.
 
 ## Repo Structure
-- `motor_sim.py` (sim core), `qt_ui.py` (UI), `AGENTS.md` (contrib guide), plus placeholder modules.
+- `motor_sim.py` (offline sim), `qt_ui.py` (batch UI), `realtime_ui.py` (live UI)
+- `control/` (PI, FOC helpers, PMSM model)
+- `AGENTS.md` (contrib guide), `README.md`, CI workflow
