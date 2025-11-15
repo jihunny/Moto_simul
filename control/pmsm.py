@@ -6,6 +6,7 @@ import math
 
 from .pid import PI
 from .foc import foc_decouple, voltage_limit
+from .svpwm import svpwm_duty
 
 
 @dataclass
@@ -122,10 +123,9 @@ class PMSMSim:
         v_a = v_alpha
         v_b = -0.5 * v_alpha + sqrt3_2 * v_beta
         v_c = -0.5 * v_alpha - sqrt3_2 * v_beta
-        # Duty estimate (sine PWM approx)
-        duty_a = max(0.0, min(1.0, 0.5 + v_a / max(self.p.Vbus, 1e-6)))
-        duty_b = max(0.0, min(1.0, 0.5 + v_b / max(self.p.Vbus, 1e-6)))
-        duty_c = max(0.0, min(1.0, 0.5 + v_c / max(self.p.Vbus, 1e-6)))
+        # Duty via SVPWM (0..1) and sector
+        d_a, d_b, d_c, sector = svpwm_duty(v_alpha, v_beta, self.p.Vbus)
+        duty_a, duty_b, duty_c = d_a, d_b, d_c
         pwm_ratio = min(1.0, vmag / (self.p.Vbus / math.sqrt(3.0)))
 
         self.extra = {
@@ -136,7 +136,7 @@ class PMSMSim:
             "i_a": i_a, "i_b": i_b, "i_c": i_c,
             "v_a": v_a, "v_b": v_b, "v_c": v_c,
             "duty_a": duty_a, "duty_b": duty_b, "duty_c": duty_c,
-            "pwm": pwm_ratio, "id_err": id_err, "iq_err": iq_err,
+            "pwm": pwm_ratio, "id_err": id_err, "iq_err": iq_err, "sector": sector,
         }
 
         return self.omega, self.id, self.iq, vd, vq, Te, vmag
