@@ -198,7 +198,7 @@ class MainWindow(QMainWindow):
         sel_box = QGroupBox("Selection")
         sel_row = QHBoxLayout(sel_box)
         self.rb_pmsm = QtWidgets.QRadioButton("PMSM"); self.rb_bldc = QtWidgets.QRadioButton("BLDC")
-        self.rb_vec = QtWidgets.QRadioButton("Vector (FOC)"); self.rb_trap = QtWidgets.QRadioButton("Trapezoidal"); self.rb_six = QtWidgets.QRadioButton("Six-step (3φ)")
+        self.rb_vec = QtWidgets.QRadioButton("Vector (FOC)"); self.rb_trap = QtWidgets.QRadioButton("Trapezoidal"); self.rb_six = QtWidgets.QRadioButton("Six-step (3ph)")
         self.rb_pmsm.setChecked(True); self.rb_vec.setChecked(True)
         for w in (self.rb_pmsm, self.rb_bldc, self.rb_vec, self.rb_trap, self.rb_six): sel_row.addWidget(w)
 
@@ -373,7 +373,13 @@ class MainWindow(QMainWindow):
 
         sel = d.get("selection", {})
         (self.rb_bldc if sel.get("motor", "PMSM").upper() == "BLDC" else self.rb_pmsm).setChecked(True)
-        (self.rb_trap if sel.get("control", "vector").lower() == "trapezoidal" else self.rb_vec).setChecked(True)
+        ctrl = sel.get("control", "vector").lower()
+        if ctrl == "trapezoidal":
+            self.rb_trap.setChecked(True)
+        elif ctrl == "sixstep":
+            self.rb_six.setChecked(True)
+        else:
+            self.rb_vec.setChecked(True)
         # Plot toggles
         plots = d.get("plots", {})
         def set_opt(btn, key):
@@ -406,7 +412,7 @@ class MainWindow(QMainWindow):
             },
             "selection": {
                 "motor": "BLDC" if self.rb_bldc.isChecked() else "PMSM",
-                "control": "trapezoidal" if self.rb_trap.isChecked() else "vector",
+                "control": "sixstep" if self.rb_six.isChecked() else ("trapezoidal" if self.rb_trap.isChecked() else "vector"),
             },
             "plots": {
                 "torque": self.chk_torque.isChecked(),
