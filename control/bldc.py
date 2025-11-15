@@ -72,3 +72,49 @@ class BLDCQSim:
 
         return self.omega, self.i, v, Te
 
+
+class BLDCTrapSim:
+    """Trapezoidal (six-step style) BLDC controller on a q-axis plant.
+
+    Uses a simple speed PI to generate a duty in [-1, 1]. The commanded
+    phase voltage is v = duty * Vbus. This approximates six-step behavior
+    without electrical angle/commutation tables in this simplified model.
+    """
+
+    def __init__(self, params: MotorParamsBLDC, gains: GainsBLDC):
+        self.p = params
+        self.g = gains
+        self.i = 0.0
+        self.omega = 0.0
+        self.pi_spd = PI(self.g.spd_kp, self.g.spd_ki, -1.0, 1.0)  # output as duty
+
+    def reset(self):
+        self.i = 0.0
+        self.omega = 0.0
+        self.pi_spd.reset()
+
+    def step(self, dt: float, mode: str, rpm_target: float, torque_ref: float, t_load: float):
+        # Duty command
+        if mode == "torque":
+            # Rough mapping torque→duty via current and Ohm's law/back-EMF drop
+            i_ref = max(min(torque_ref / self.p.Kt, self.p.Imax), -self.p.Imax)
+            # Estimate v needed to achieve i_ref in one step (very crude)
+            v_cmd = self.p.R * i_ref + self.p.Ke * self.omega
+            duty = max(min(v_cmd / self.p.Vbus, 1.0), -1.0)
+        else:
+            omega_ref = rpm_target * 2.0 * 3.141592653589793 / 60.0
+            spd_err = omega_ref - self.omega
+            duty = self.pi_spd.step(spd_err, dt)
+
+        v = duty * self.p.Vbus
+
+        # Electrical dynamics
+        di_dt = (v - self.p.Ke * self.omega - self.p.R * self.i) / self.p.L
+        self.i += di_dt * dt
+
+        # Mechanical
+        Te = self.p.Kt * self.i
+        domega_dt = (Te - self.p.B * self.omega - t_load) / self.p.J
+        self.omega += domega_dt * dt
+
+        return self.omega, self.i, v, Te, duty

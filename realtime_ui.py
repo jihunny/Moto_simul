@@ -56,7 +56,7 @@ except Exception:
         HAS_MPL = False
 
 from control import MotorParams, Gains, PMSMSim
-from control.bldc import MotorParamsBLDC, GainsBLDC, BLDCQSim
+from control.bldc import MotorParamsBLDC, GainsBLDC, BLDCQSim, BLDCTrapSim
 
 
 class LivePlot(QWidget):
@@ -66,6 +66,8 @@ class LivePlot(QWidget):
         self.tdata = []
         self.rpm = []
         self.iq = []
+        self.torque = []
+        self.vmag = []
         if HAS_PG:
             pg.setConfigOptions(antialias=True)
             self.plot_rpm = pg.PlotWidget(title="speed [rpm]")
@@ -74,6 +76,15 @@ class LivePlot(QWidget):
             self.cur_iq = self.plot_iq.plot([], [], pen=pg.mkPen('c', width=2))
             layout.addWidget(self.plot_rpm)
             layout.addWidget(self.plot_iq)
+            # Optional plots hidden by default
+            self.plot_torque = pg.PlotWidget(title="torque [N·m]")
+            self.cur_torque = self.plot_torque.plot([], [], pen=pg.mkPen('m', width=2))
+            self.plot_vmag = pg.PlotWidget(title="|v| [V]")
+            self.cur_vmag = self.plot_vmag.plot([], [], pen=pg.mkPen('w', width=2))
+            self.plot_torque.setVisible(False)
+            self.plot_vmag.setVisible(False)
+            layout.addWidget(self.plot_torque)
+            layout.addWidget(self.plot_vmag)
         elif HAS_MPL:
             try:
                 matplotlib.use("Qt5Agg")
@@ -86,24 +97,33 @@ class LivePlot(QWidget):
             self.ax[0].set_xlabel("t [s]"); self.ax[0].set_ylabel("rpm"); self.ax[0].grid(True); self.ax[0].legend()
             (self.l_iq,) = self.ax[1].plot([], [], color="tab:red", label="i_q [A]")
             self.ax[1].set_xlabel("t [s]"); self.ax[1].set_ylabel("A"); self.ax[1].grid(True); self.ax[1].legend()
+            # Optional subplots created lazily; we will just overlay via toggles by reusing axes
         else:
             self.msg = QLabel("Install pyqtgraph or matplotlib for plots")
             layout.addWidget(self.msg)
 
-    def append(self, t: float, rpm: float, iq: float, max_window: float = 10.0):
+    def append(self, t: float, rpm: float, iq: float, torque: float | None = None, vmag: float | None = None, max_window: float = 10.0):
         if not (HAS_PG or HAS_MPL):
             return
         self.tdata.append(t)
         self.rpm.append(rpm)
         self.iq.append(iq)
+        self.torque.append(torque if torque is not None else 0.0)
+        self.vmag.append(vmag if vmag is not None else 0.0)
         # Keep a sliding window
         while self.tdata and (self.tdata[-1] - self.tdata[0]) > max_window:
-            self.tdata.pop(0); self.rpm.pop(0); self.iq.pop(0)
+            self.tdata.pop(0); self.rpm.pop(0); self.iq.pop(0); self.torque.pop(0); self.vmag.pop(0)
         if HAS_PG:
             self.cur_rpm.setData(self.tdata, self.rpm)
             self.cur_iq.setData(self.tdata, self.iq)
             self.plot_rpm.enableAutoRange()
             self.plot_iq.enableAutoRange()
+            if self.plot_torque.isVisible():
+                self.cur_torque.setData(self.tdata, self.torque)
+                self.plot_torque.enableAutoRange()
+            if self.plot_vmag.isVisible():
+                self.cur_vmag.setData(self.tdata, self.vmag)
+                self.plot_vmag.enableAutoRange()
         elif HAS_MPL:
             self.l_rpm.set_data(self.tdata, self.rpm)
             self.l_iq.set_data(self.tdata, self.iq)
@@ -147,6 +167,7 @@ class MainWindow(QMainWindow):
         self.spin_Ld = QDoubleSpinBox(); self.spin_Ld.setRange(1e-6, 1.0); self.spin_Ld.setDecimals(6); self.spin_Ld.setValue(0.0002)
         self.spin_Lq = QDoubleSpinBox(); self.spin_Lq.setRange(1e-6, 1.0); self.spin_Lq.setDecimals(6); self.spin_Lq.setValue(0.0002)
         self.spin_Kt = QDoubleSpinBox(); self.spin_Kt.setRange(1e-4, 1.0); self.spin_Kt.setDecimals(5); self.spin_Kt.setValue(0.06)
+        self.spin_Ke_bldc = QDoubleSpinBox(); self.spin_Ke_bldc.setRange(1e-4, 1.0); self.spin_Ke_bldc.setDecimals(5); self.spin_Ke_bldc.setValue(0.06)
         self.spin_p = QSpinBox(); self.spin_p.setRange(1, 32); self.spin_p.setValue(4)
         self.spin_J = QDoubleSpinBox(); self.spin_J.setRange(1e-6, 1.0); self.spin_J.setDecimals(7); self.spin_J.setValue(2.0e-4)
         self.spin_B = QDoubleSpinBox(); self.spin_B.setRange(0.0, 0.1); self.spin_B.setDecimals(7); self.spin_B.setValue(1.0e-4)
@@ -155,7 +176,7 @@ class MainWindow(QMainWindow):
 
         for label, w in [
             ("R [Ω]", self.spin_R), ("Ld [H]", self.spin_Ld), ("Lq [H]", self.spin_Lq),
-            ("Kt [N·m/A]", self.spin_Kt), ("Pole Pairs [p]", self.spin_p), ("J [kg·m²]", self.spin_J),
+            ("Kt [N·m/A]", self.spin_Kt), ("Ke [V·s/rad] (BLDC)", self.spin_Ke_bldc), ("Pole Pairs [p]", self.spin_p), ("J [kg·m²]", self.spin_J),
             ("B [N·m·s/rad]", self.spin_B), ("Vbus [V]", self.spin_V), ("Imax [A]", self.spin_Imax)
         ]:
             mform.addRow(label, w)
@@ -244,10 +265,22 @@ class MainWindow(QMainWindow):
                 self._load_preset_from_path(default_path)
                 self.lbl.setText(f"Loaded default preset: {default_path}")
 
+        # Plot visibility toggles
+        self.chk_torque = QPushButton("Show Torque")
+        self.chk_vmag = QPushButton("Show |V|")
+        # Use checkable buttons for consistent look
+        self.chk_torque.setCheckable(True); self.chk_vmag.setCheckable(True)
+        plot_toggle = QHBoxLayout(); plot_toggle.addWidget(self.chk_torque); plot_toggle.addWidget(self.chk_vmag)
+        self.centralWidget().layout().addLayout(plot_toggle)  # type: ignore
+        # Toggle handlers
+        if HAS_PG:
+            self.chk_torque.toggled.connect(lambda on: self.plot.plot_torque.setVisible(on))
+            self.chk_vmag.toggled.connect(lambda on: self.plot.plot_vmag.setVisible(on))
+
     def build_params(self):
         if self.rb_bldc.isChecked():
             p = MotorParamsBLDC(
-                R=self.spin_R.value(), L=self.spin_Ld.value(), Kt=self.spin_Kt.value(), Ke=self.spin_Kt.value(),
+                R=self.spin_R.value(), L=self.spin_Ld.value(), Kt=self.spin_Kt.value(), Ke=self.spin_Ke_bldc.value(),
                 J=self.spin_J.value(), B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value(),
             )
             g = GainsBLDC(
@@ -272,7 +305,8 @@ class MainWindow(QMainWindow):
         if self.sim is None:
             p, g = self.build_params()
             if self.rb_bldc.isChecked():
-                self.sim = BLDCQSim(p, g)
+                # Choose vector vs trapezoid
+                self.sim = BLDCQSim(p, g) if self.rb_vec.isChecked() else BLDCTrapSim(p, g)
             else:
                 self.sim = PMSMSim(p, g)
         # Apply refs
@@ -409,8 +443,14 @@ class MainWindow(QMainWindow):
                 self.t += dt
                 last = (self.t, omega, id_, iq_, vd, vq, Te, vmag)
                 self._csv_log.append((self.t, omega, omega * 60.0 / (2.0 * 3.141592653589793), iq_, id_, vd, vq, Te, vmag))
-            else:
+            elif isinstance(self.sim, BLDCQSim):
                 omega, i, v, Te = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
+                self.t += dt
+                rpm = omega * 60.0 / (2.0 * 3.141592653589793)
+                last = (self.t, omega, 0.0, i, 0.0, v, Te, abs(v))
+                self._csv_log.append((self.t, omega, rpm, i, 0.0, 0.0, v, Te, abs(v)))
+            else:  # BLDCTrapSim
+                omega, i, v, Te, duty = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
                 self.t += dt
                 rpm = omega * 60.0 / (2.0 * 3.141592653589793)
                 last = (self.t, omega, 0.0, i, 0.0, v, Te, abs(v))
@@ -419,7 +459,7 @@ class MainWindow(QMainWindow):
         if last is not None:
             t, omega, id_or0, iq_or_i, vd_or0, vq_or_v, Te, vmag = last
             rpm = omega * 60.0 / (2.0 * 3.141592653589793)
-            self.plot.append(t, rpm, iq_or_i)
+            self.plot.append(t, rpm, iq_or_i, Te, vmag)
             self.lbl.setText(f"t={t:.2f}s rpm={rpm:.0f} I/iq={iq_or_i:.2f}A Te={Te:.3f}N·m |v|={vmag:.1f}V")
 
 
