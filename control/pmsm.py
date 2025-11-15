@@ -45,6 +45,7 @@ class PMSMSim:
         self.id = 0.0
         self.iq = 0.0
         self.omega = 0.0  # mechanical rad/s
+        self.theta_e = 0.0  # electrical angle [rad]
 
         # Controllers
         self.pi_spd = PI(self.g.spd_kp, self.g.spd_ki, -self.p.Imax, self.p.Imax)
@@ -59,11 +60,13 @@ class PMSMSim:
         self.id = 0.0
         self.iq = 0.0
         self.omega = 0.0
+        self.theta_e = 0.0
         self.pi_spd.reset(); self.pi_id.reset(); self.pi_iq.reset()
 
     def step(self, dt: float, mode: str, rpm_target: float, torque_ref: float, t_load: float) -> Tuple[float, float, float, float, float, float, float]:
-        # Electrical speed
+        # Electrical speed and angle
         omega_e = self.p.p * self.omega
+        self.theta_e = (self.theta_e + omega_e * dt) % (2.0 * math.pi)
 
         # Compute current refs
         if mode == "torque":
@@ -101,5 +104,39 @@ class PMSMSim:
         domega_dt = (Te - self.p.B * self.omega - t_load) / self.p.J
         self.omega += domega_dt * dt
 
-        return self.omega, self.id, self.iq, vd, vq, Te, vmag
+        # Diagnostics for UI (alpha-beta, phases, PWM, errors)
+        cos_t = math.cos(self.theta_e); sin_t = math.sin(self.theta_e)
+        # dq -> alpha-beta
+        v_alpha = cos_t * vd - sin_t * vq
+        v_beta = sin_t * vd + cos_t * vq
+        i_alpha = cos_t * self.id - sin_t * self.iq
+        i_beta = sin_t * self.id + cos_t * self.iq
+        # Back-EMF for SPMSM
+        e_alpha = -self.p.psi * omega_e * sin_t
+        e_beta = self.p.psi * omega_e * cos_t
+        # Phase reconstruction (inverse Clarke)
+        sqrt3_2 = math.sqrt(3) / 2.0
+        i_a = i_alpha
+        i_b = -0.5 * i_alpha + sqrt3_2 * i_beta
+        i_c = -0.5 * i_alpha - sqrt3_2 * i_beta
+        v_a = v_alpha
+        v_b = -0.5 * v_alpha + sqrt3_2 * v_beta
+        v_c = -0.5 * v_alpha - sqrt3_2 * v_beta
+        # Duty estimate (sine PWM approx)
+        duty_a = max(0.0, min(1.0, 0.5 + v_a / max(self.p.Vbus, 1e-6)))
+        duty_b = max(0.0, min(1.0, 0.5 + v_b / max(self.p.Vbus, 1e-6)))
+        duty_c = max(0.0, min(1.0, 0.5 + v_c / max(self.p.Vbus, 1e-6)))
+        pwm_ratio = min(1.0, vmag / (self.p.Vbus / math.sqrt(3.0)))
 
+        self.extra = {
+            "theta_e": self.theta_e, "omega_e": omega_e,
+            "v_alpha": v_alpha, "v_beta": v_beta,
+            "i_alpha": i_alpha, "i_beta": i_beta,
+            "e_alpha": e_alpha, "e_beta": e_beta,
+            "i_a": i_a, "i_b": i_b, "i_c": i_c,
+            "v_a": v_a, "v_b": v_b, "v_c": v_c,
+            "duty_a": duty_a, "duty_b": duty_b, "duty_c": duty_c,
+            "pwm": pwm_ratio, "id_err": id_err, "iq_err": iq_err,
+        }
+
+        return self.omega, self.id, self.iq, vd, vq, Te, vmag

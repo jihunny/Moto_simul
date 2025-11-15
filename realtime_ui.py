@@ -60,6 +60,11 @@ class LivePlot(QWidget):
         layout = QVBoxLayout(self)
         self.tdata, self.rpm, self.iq = [], [], []
         self.torque, self.vmag = [], []
+        self.pwm = []
+        self.id_hist, self.iq_hist = [], []
+        self.id_err_hist, self.iq_err_hist = [], []
+        self.ia_hist, self.ib_hist, self.ic_hist = [], [], []
+        self.duty_a, self.duty_b, self.duty_c = [], [], []
         if HAS_PG:
             pg.setConfigOptions(antialias=True)
             self.plot_rpm = pg.PlotWidget(title="speed [rpm]")
@@ -73,6 +78,32 @@ class LivePlot(QWidget):
             self.cur_vmag = self.plot_vmag.plot([], [], pen=pg.mkPen('w', width=2))
             self.plot_torque.setVisible(False); self.plot_vmag.setVisible(False)
             layout.addWidget(self.plot_torque); layout.addWidget(self.plot_vmag)
+            # Additional diagnostics
+            self.plot_pwm = pg.PlotWidget(title="PWM ratio")
+            self.cur_pwm = self.plot_pwm.plot([], [], pen=pg.mkPen('g', width=2))
+            self.plot_pwm.setVisible(False); layout.addWidget(self.plot_pwm)
+
+            self.plot_idiq = pg.PlotWidget(title="Id/Iq [A]")
+            self.cur_id = self.plot_idiq.plot([], [], pen=pg.mkPen('b', width=2), name='Id')
+            self.cur_iq2 = self.plot_idiq.plot([], [], pen=pg.mkPen('c', width=2), name='Iq')
+            self.plot_idiq.setVisible(False); layout.addWidget(self.plot_idiq)
+
+            self.plot_err = pg.PlotWidget(title="Id/Iq error [A]")
+            self.cur_id_err = self.plot_err.plot([], [], pen=pg.mkPen('r', width=2))
+            self.cur_iq_err = self.plot_err.plot([], [], pen=pg.mkPen('y', width=2))
+            self.plot_err.setVisible(False); layout.addWidget(self.plot_err)
+
+            self.plot_coils = pg.PlotWidget(title="Phase currents i_a/i_b/i_c [A]")
+            self.cur_ia = self.plot_coils.plot([], [], pen=pg.mkPen('r', width=2))
+            self.cur_ib = self.plot_coils.plot([], [], pen=pg.mkPen('g', width=2))
+            self.cur_ic = self.plot_coils.plot([], [], pen=pg.mkPen('b', width=2))
+            self.plot_coils.setVisible(False); layout.addWidget(self.plot_coils)
+
+            self.plot_duty = pg.PlotWidget(title="Gate duty a/b/c [0..1]")
+            self.cur_da = self.plot_duty.plot([], [], pen=pg.mkPen('r', width=2))
+            self.cur_db = self.plot_duty.plot([], [], pen=pg.mkPen('g', width=2))
+            self.cur_dc = self.plot_duty.plot([], [], pen=pg.mkPen('b', width=2))
+            self.plot_duty.setVisible(False); layout.addWidget(self.plot_duty)
         elif HAS_MPL:
             try:
                 matplotlib.use("Qt5Agg")
@@ -88,12 +119,25 @@ class LivePlot(QWidget):
         else:
             layout.addWidget(QLabel("Install pyqtgraph or matplotlib for plots"))
 
-    def append(self, t: float, rpm: float, iq: float, torque: float = 0.0, vmag: float = 0.0, max_window: float = 10.0):
+    def append(self, t: float, rpm: float, iq: float, torque: float = 0.0, vmag: float = 0.0, extra: dict | None = None, max_window: float = 10.0):
         if not (HAS_PG or HAS_MPL):
             return
         self.tdata.append(t); self.rpm.append(rpm); self.iq.append(iq); self.torque.append(torque); self.vmag.append(vmag)
+        if extra:
+            self.pwm.append(extra.get('pwm', 0.0))
+            self.id_hist.append(extra.get('id', extra.get('id_val', 0.0)))
+            self.iq_hist.append(extra.get('iq', iq))
+            self.id_err_hist.append(extra.get('id_err', 0.0))
+            self.iq_err_hist.append(extra.get('iq_err', 0.0))
+            self.ia_hist.append(extra.get('i_a', 0.0)); self.ib_hist.append(extra.get('i_b', 0.0)); self.ic_hist.append(extra.get('i_c', 0.0))
+            self.duty_a.append(extra.get('duty_a', 0.0)); self.duty_b.append(extra.get('duty_b', 0.0)); self.duty_c.append(extra.get('duty_c', 0.0))
         while self.tdata and (self.tdata[-1] - self.tdata[0]) > max_window:
             self.tdata.pop(0); self.rpm.pop(0); self.iq.pop(0); self.torque.pop(0); self.vmag.pop(0)
+            if self.pwm: self.pwm.pop(0)
+            if self.id_hist: self.id_hist.pop(0); self.iq_hist.pop(0)
+            if self.id_err_hist: self.id_err_hist.pop(0); self.iq_err_hist.pop(0)
+            if self.ia_hist: self.ia_hist.pop(0); self.ib_hist.pop(0); self.ic_hist.pop(0)
+            if self.duty_a: self.duty_a.pop(0); self.duty_b.pop(0); self.duty_c.pop(0)
         if HAS_PG:
             self.cur_rpm.setData(self.tdata, self.rpm)
             self.cur_iq.setData(self.tdata, self.iq)
@@ -101,6 +145,16 @@ class LivePlot(QWidget):
                 self.cur_torque.setData(self.tdata, self.torque)
             if self.plot_vmag.isVisible():
                 self.cur_vmag.setData(self.tdata, self.vmag)
+            if hasattr(self, 'plot_pwm') and self.plot_pwm.isVisible():
+                self.cur_pwm.setData(self.tdata, self.pwm)
+            if hasattr(self, 'plot_idiq') and self.plot_idiq.isVisible():
+                self.cur_id.setData(self.tdata, self.id_hist); self.cur_iq2.setData(self.tdata, self.iq_hist)
+            if hasattr(self, 'plot_err') and self.plot_err.isVisible():
+                self.cur_id_err.setData(self.tdata, self.id_err_hist); self.cur_iq_err.setData(self.tdata, self.iq_err_hist)
+            if hasattr(self, 'plot_coils') and self.plot_coils.isVisible():
+                self.cur_ia.setData(self.tdata, self.ia_hist); self.cur_ib.setData(self.tdata, self.ib_hist); self.cur_ic.setData(self.tdata, self.ic_hist)
+            if hasattr(self, 'plot_duty') and self.plot_duty.isVisible():
+                self.cur_da.setData(self.tdata, self.duty_a); self.cur_db.setData(self.tdata, self.duty_b); self.cur_dc.setData(self.tdata, self.duty_c)
         elif HAS_MPL:
             self.l_rpm.set_data(self.tdata, self.rpm)
             self.l_iq.set_data(self.tdata, self.iq)
@@ -193,12 +247,20 @@ class MainWindow(QMainWindow):
 
         # Plot toggles (only meaningful with pyqtgraph)
         self.chk_torque = QPushButton("Show Torque"); self.chk_vmag = QPushButton("Show |V|")
-        self.chk_torque.setCheckable(True); self.chk_vmag.setCheckable(True)
-        toggle_row = QHBoxLayout(); toggle_row.addWidget(self.chk_torque); toggle_row.addWidget(self.chk_vmag)
+        self.chk_pwm = QPushButton("Show PWM"); self.chk_idiq = QPushButton("Show Id/Iq")
+        self.chk_err = QPushButton("Show Id/Iq error"); self.chk_coils = QPushButton("Show Phase Currents"); self.chk_duty = QPushButton("Show Gate Duty")
+        for b in (self.chk_torque, self.chk_vmag, self.chk_pwm, self.chk_idiq, self.chk_err, self.chk_coils, self.chk_duty): b.setCheckable(True)
+        toggle_row = QHBoxLayout()
+        for b in (self.chk_torque, self.chk_vmag, self.chk_pwm, self.chk_idiq, self.chk_err, self.chk_coils, self.chk_duty): toggle_row.addWidget(b)
         left.addLayout(toggle_row)
         if HAS_PG:
             self.chk_torque.toggled.connect(lambda on: self.plot.plot_torque.setVisible(on))
             self.chk_vmag.toggled.connect(lambda on: self.plot.plot_vmag.setVisible(on))
+            self.chk_pwm.toggled.connect(lambda on: self.plot.plot_pwm.setVisible(on))
+            self.chk_idiq.toggled.connect(lambda on: self.plot.plot_idiq.setVisible(on))
+            self.chk_err.toggled.connect(lambda on: self.plot.plot_err.setVisible(on))
+            self.chk_coils.toggled.connect(lambda on: self.plot.plot_coils.setVisible(on))
+            self.chk_duty.toggled.connect(lambda on: self.plot.plot_duty.setVisible(on))
 
         # Autoload preset
         if preset_path:
@@ -370,7 +432,12 @@ class MainWindow(QMainWindow):
                 self._csv_log.append((self.t, omega, rpm, i_equiv, 0.0, 0.0, vmag, Te, vmag))
         if last is not None:
             t, omega, id_or0, iq_or_i, vd_or0, vq_or_v, Te, vmag = last; rpm = omega * 60.0 / (2.0 * 3.141592653589793)
-            self.plot.append(t, rpm, iq_or_i, Te, vmag)
+            # Extra diagnostics for PMSM
+            extra = {}
+            if isinstance(self.sim, PMSMSim) and hasattr(self.sim, 'extra'):
+                ex = self.sim.extra
+                extra = {**ex, 'id': id_or0, 'iq': iq_or_i}
+            self.plot.append(t, rpm, iq_or_i, Te, vmag, extra)
             self.lbl.setText(f"t={t:.2f}s rpm={rpm:.0f} I/iq={iq_or_i:.2f}A Te={Te:.3f}N·m |v|={vmag:.1f}V")
 
 
