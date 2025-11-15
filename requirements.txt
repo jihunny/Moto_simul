@@ -1,0 +1,5 @@
+# Core simulation uses only Python stdlib.
+# Optional UI/plotting dependencies (install as needed):
+# PySide6
+# PyQt5
+# matplotlib
