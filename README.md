@@ -11,7 +11,9 @@ A lightweight Python simulator for a Permanent Magnet Synchronous Motor (PMSM) w
 ## Quickstart
 - Python 3.9+ recommended.
 - Create venv (Windows): `python -m venv .venv && . .venv/Scripts/activate`
-- Install UI deps (optional): `pip install PySide6 matplotlib`
+- Optional UI deps:
+  - PySide6 stack: `pip install -r requirements-ui-pyside.txt`
+  - PyQt5 stack: `pip install -r requirements-ui-pyqt5.txt`
 
 Run CLI examples:
 - Speed: `python motor_sim.py --mode speed --rpm 2000 --duration 1.5 --dt 0.0005 --csv out.csv`
@@ -28,6 +30,9 @@ Realtime UI:
   - FOC gains: tune Speed/Id/Iq PI gains directly in the UI.
   - Presets: save/load motor and gain profiles as JSON.
   - Update rate set by "UI period"; plant integrates at smaller dt.
+
+Presets:
+- Example: `presets/default_spmsm.json`. Load it from the realtime UI (Load Preset…).
 
 ## Output
 - CSV columns: `t_s, omega_rad_s, speed_rpm, iq_a, iq_ref_a, v_mag_v, t_load_nm, speed_err, iq_err, id_a, id_ref_a, vd_v, vq_v, Te_nm`.
@@ -48,3 +53,4 @@ Realtime UI:
 - `motor_sim.py` (offline sim), `qt_ui.py` (batch UI), `realtime_ui.py` (live UI)
 - `control/` (PI, FOC helpers, PMSM model)
 - `AGENTS.md` (contrib guide), `README.md`, CI workflow
+- `presets/` (sample JSON presets), `docs/` (screenshots for README)
