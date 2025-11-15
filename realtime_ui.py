@@ -66,6 +66,14 @@ class LivePlot(QWidget):
         self.ia_hist, self.ib_hist, self.ic_hist = [], [], []
         self.duty_a, self.duty_b, self.duty_c = [], [], []
         if HAS_PG:
+            # Space vector (alpha-beta plane)
+            self.space = pg.PlotWidget(title="Space Vector (αβ)")
+            self.space.setAspectLocked(True, ratio=1)
+            self.space.showGrid(x=True, y=True, alpha=0.3)
+            self.sv_v = self.space.plot([], [], pen=pg.mkPen('y', width=3), name='V')
+            self.sv_e = self.space.plot([], [], pen=pg.mkPen('r', width=2), name='EMF')
+            self.space.setVisible(False)
+            layout.addWidget(self.space)
             pg.setConfigOptions(antialias=True)
             self.plot_rpm = pg.PlotWidget(title="speed [rpm]")
             self.plot_iq = pg.PlotWidget(title="I/iq [A]")
@@ -131,6 +139,16 @@ class LivePlot(QWidget):
             self.iq_err_hist.append(extra.get('iq_err', 0.0))
             self.ia_hist.append(extra.get('i_a', 0.0)); self.ib_hist.append(extra.get('i_b', 0.0)); self.ic_hist.append(extra.get('i_c', 0.0))
             self.duty_a.append(extra.get('duty_a', 0.0)); self.duty_b.append(extra.get('duty_b', 0.0)); self.duty_c.append(extra.get('duty_c', 0.0))
+            # Update space vector if visible
+            if HAS_PG and hasattr(self, 'space') and self.space.isVisible():
+                v_alpha = extra.get('v_alpha', 0.0); v_beta = extra.get('v_beta', 0.0)
+                e_alpha = extra.get('e_alpha', 0.0); e_beta = extra.get('e_beta', 0.0)
+                self.sv_v.setData([0.0, v_alpha], [0.0, v_beta])
+                self.sv_e.setData([0.0, e_alpha], [0.0, e_beta])
+                # Keep axes symmetric around origin for clarity
+                rng = max(1.0, abs(v_alpha), abs(v_beta), abs(e_alpha), abs(e_beta))
+                self.space.setXRange(-rng, rng, padding=0.1)
+                self.space.setYRange(-rng, rng, padding=0.1)
         while self.tdata and (self.tdata[-1] - self.tdata[0]) > max_window:
             self.tdata.pop(0); self.rpm.pop(0); self.iq.pop(0); self.torque.pop(0); self.vmag.pop(0)
             if self.pwm: self.pwm.pop(0)
@@ -249,9 +267,10 @@ class MainWindow(QMainWindow):
         self.chk_torque = QPushButton("Show Torque"); self.chk_vmag = QPushButton("Show |V|")
         self.chk_pwm = QPushButton("Show PWM"); self.chk_idiq = QPushButton("Show Id/Iq")
         self.chk_err = QPushButton("Show Id/Iq error"); self.chk_coils = QPushButton("Show Phase Currents"); self.chk_duty = QPushButton("Show Gate Duty")
-        for b in (self.chk_torque, self.chk_vmag, self.chk_pwm, self.chk_idiq, self.chk_err, self.chk_coils, self.chk_duty): b.setCheckable(True)
+        self.chk_space = QPushButton("Show Space Vector")
+        for b in (self.chk_torque, self.chk_vmag, self.chk_pwm, self.chk_idiq, self.chk_err, self.chk_coils, self.chk_duty, self.chk_space): b.setCheckable(True)
         toggle_row = QHBoxLayout()
-        for b in (self.chk_torque, self.chk_vmag, self.chk_pwm, self.chk_idiq, self.chk_err, self.chk_coils, self.chk_duty): toggle_row.addWidget(b)
+        for b in (self.chk_torque, self.chk_vmag, self.chk_pwm, self.chk_idiq, self.chk_err, self.chk_coils, self.chk_duty, self.chk_space): toggle_row.addWidget(b)
         left.addLayout(toggle_row)
         if HAS_PG:
             self.chk_torque.toggled.connect(lambda on: self.plot.plot_torque.setVisible(on))
@@ -261,6 +280,7 @@ class MainWindow(QMainWindow):
             self.chk_err.toggled.connect(lambda on: self.plot.plot_err.setVisible(on))
             self.chk_coils.toggled.connect(lambda on: self.plot.plot_coils.setVisible(on))
             self.chk_duty.toggled.connect(lambda on: self.plot.plot_duty.setVisible(on))
+            self.chk_space.toggled.connect(lambda on: self.plot.space.setVisible(on))
 
         # Autoload preset
         if preset_path:
@@ -354,6 +374,20 @@ class MainWindow(QMainWindow):
         sel = d.get("selection", {})
         (self.rb_bldc if sel.get("motor", "PMSM").upper() == "BLDC" else self.rb_pmsm).setChecked(True)
         (self.rb_trap if sel.get("control", "vector").lower() == "trapezoidal" else self.rb_vec).setChecked(True)
+        # Plot toggles
+        plots = d.get("plots", {})
+        def set_opt(btn, key):
+            val = plots.get(key)
+            if isinstance(val, bool):
+                btn.setChecked(val)
+        set_opt(self.chk_torque, 'torque')
+        set_opt(self.chk_vmag, 'vmag')
+        set_opt(self.chk_pwm, 'pwm')
+        set_opt(self.chk_idiq, 'idiq')
+        set_opt(self.chk_err, 'err')
+        set_opt(self.chk_coils, 'coils')
+        set_opt(self.chk_duty, 'duty')
+        set_opt(self.chk_space, 'space')
 
     def _preset_dict(self):
         return {
@@ -373,6 +407,16 @@ class MainWindow(QMainWindow):
             "selection": {
                 "motor": "BLDC" if self.rb_bldc.isChecked() else "PMSM",
                 "control": "trapezoidal" if self.rb_trap.isChecked() else "vector",
+            },
+            "plots": {
+                "torque": self.chk_torque.isChecked(),
+                "vmag": self.chk_vmag.isChecked(),
+                "pwm": self.chk_pwm.isChecked(),
+                "idiq": self.chk_idiq.isChecked(),
+                "err": self.chk_err.isChecked(),
+                "coils": self.chk_coils.isChecked(),
+                "duty": self.chk_duty.isChecked(),
+                "space": self.chk_space.isChecked(),
             },
         }
 
