@@ -144,3 +144,92 @@ class BLDCTrapSim:
         self.omega += domega_dt * dt
 
         return self.omega, self.i, v, Te, duty
+
+
+class BLDCSixStepSim:
+    """3‑phase six‑step BLDC with simple commutation table and trapezoidal EMF.
+
+    - Phase currents: i_a, i_b, i_c (star connection, no neutral).
+    - Phase EMFs: e_a = Ke*ω*f(θe), e_b = Ke*ω*f(θe-2π/3), e_c = Ke*ω*f(θe+2π/3).
+    - Voltages: per sector, two phases are driven ±Vbus, one is floating; we
+      subtract average to get neutral‑referenced phase voltages.
+    - Control: speed PI → duty ∈ [0,1]; torque mode maps torque→duty crudely.
+    """
+
+    def __init__(self, params: MotorParamsBLDC, gains: GainsBLDC):
+        self.p = params
+        self.g = gains
+        self.ia = 0.0; self.ib = 0.0; self.ic = 0.0
+        self.omega = 0.0
+        self.theta_e = 0.0
+        self.pi_spd = PI(self.g.spd_kp, self.g.spd_ki, 0.0, 1.0)  # duty 0..1
+
+    @staticmethod
+    def _trap(th: float) -> float:
+        import math
+        th = th % (2.0 * math.pi)
+        pi = math.pi
+        if 0.0 <= th < pi/6: return th/(pi/6)
+        if pi/6 <= th < 5*pi/6: return 1.0
+        if 5*pi/6 <= th < 7*pi/6: return 1.0 - 2.0*(th-5*pi/6)/(pi/3)
+        if 7*pi/6 <= th < 11*pi/6: return -1.0
+        return -1.0 + (th-11*pi/6)/(pi/6)
+
+    def _sector(self, th: float) -> int:
+        import math
+        return int((th % (2.0*math.pi)) // (math.pi/3))  # 0..5
+
+    def reset(self):
+        self.ia = self.ib = self.ic = 0.0
+        self.omega = 0.0
+        self.theta_e = 0.0
+        self.pi_spd.reset()
+
+    def step(self, dt: float, mode: str, rpm_target: float, torque_ref: float, t_load: float):
+        import math
+        # Duty generation
+        if mode == "torque":
+            i_ref = max(min(torque_ref / self.p.Kt, self.p.Imax), -self.p.Imax)
+            v_est = self.p.R * i_ref + self.p.Ke * self.omega
+            duty = max(0.0, min(abs(v_est) / max(self.p.Vbus, 1e-6), 1.0))
+        else:
+            omega_ref = rpm_target * 2.0 * math.pi / 60.0
+            spd_err = omega_ref - self.omega
+            duty = self.pi_spd.step(spd_err, dt)
+
+        # Electrical angle and EMFs
+        omega_e = self.p.p * self.omega
+        self.theta_e = (self.theta_e + omega_e * dt) % (2.0 * math.pi)
+        ea = self.p.Ke * self.omega * self._trap(self.theta_e)
+        eb = self.p.Ke * self.omega * self._trap(self.theta_e - 2.0*math.pi/3.0)
+        ec = self.p.Ke * self.omega * self._trap(self.theta_e + 2.0*math.pi/3.0)
+
+        # Commutation voltages per sector (A,B,C): (+V, -V, Z)
+        sec = self._sector(self.theta_e)
+        pattern = [
+            (1, -1, 0),  # 0: A+,B-,Cz
+            (1, 0, -1),  # 1: A+,C-,Bz
+            (0, 1, -1),  # 2: B+,C-,Az
+            (-1, 1, 0),  # 3: A-,B+,Cz
+            (-1, 0, 1),  # 4: A-,C+,Bz
+            (0, -1, 1),  # 5: B-,C+,Az
+        ][sec]
+        va_t = duty * self.p.Vbus * pattern[0]
+        vb_t = duty * self.p.Vbus * pattern[1]
+        vc_t = duty * self.p.Vbus * pattern[2]
+        v_avg = (va_t + vb_t + vc_t) / 3.0
+        va = va_t - v_avg; vb = vb_t - v_avg; vc = vc_t - v_avg
+
+        # Phase dynamics
+        dia = (va - ea - self.p.R * self.ia) / self.p.L
+        dib = (vb - eb - self.p.R * self.ib) / self.p.L
+        dic = (vc - ec - self.p.R * self.ic) / self.p.L
+        self.ia += dia * dt; self.ib += dib * dt; self.ic += dic * dt
+
+        # Torque approximation from phase contributions
+        Te = self.p.Kt * (self._trap(self.theta_e) * self.ia + self._trap(self.theta_e - 2.0*math.pi/3.0) * self.ib + self._trap(self.theta_e + 2.0*math.pi/3.0) * self.ic)
+
+        domega = (Te - self.p.B * self.omega - t_load) / self.p.J
+        self.omega += domega * dt
+
+        return self.omega, (self.ia, self.ib, self.ic), (va, vb, vc), Te, duty

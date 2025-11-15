@@ -51,7 +51,7 @@ except Exception:
         HAS_MPL = False
 
 from control import MotorParams, Gains, PMSMSim
-from control.bldc import MotorParamsBLDC, GainsBLDC, BLDCQSim, BLDCTrapSim
+from control.bldc import MotorParamsBLDC, GainsBLDC, BLDCQSim, BLDCTrapSim, BLDCSixStepSim
 
 
 class LivePlot(QWidget):
@@ -126,9 +126,9 @@ class MainWindow(QMainWindow):
         sel_box = QGroupBox("Selection")
         sel_row = QHBoxLayout(sel_box)
         self.rb_pmsm = QtWidgets.QRadioButton("PMSM"); self.rb_bldc = QtWidgets.QRadioButton("BLDC")
-        self.rb_vec = QtWidgets.QRadioButton("Vector (FOC)"); self.rb_trap = QtWidgets.QRadioButton("Trapezoidal")
+        self.rb_vec = QtWidgets.QRadioButton("Vector (FOC)"); self.rb_trap = QtWidgets.QRadioButton("Trapezoidal"); self.rb_six = QtWidgets.QRadioButton("Six-step (3φ)")
         self.rb_pmsm.setChecked(True); self.rb_vec.setChecked(True)
-        for w in (self.rb_pmsm, self.rb_bldc, self.rb_vec, self.rb_trap): sel_row.addWidget(w)
+        for w in (self.rb_pmsm, self.rb_bldc, self.rb_vec, self.rb_trap, self.rb_six): sel_row.addWidget(w)
 
         motor_box = QGroupBox("Motor Params")
         mform = QFormLayout(motor_box)
@@ -223,7 +223,12 @@ class MainWindow(QMainWindow):
         if self.sim is None:
             p, g = self.build_params()
             if self.rb_bldc.isChecked():
-                self.sim = BLDCQSim(p, g) if self.rb_vec.isChecked() else BLDCTrapSim(p, g)
+                if self.rb_vec.isChecked():
+                    self.sim = BLDCQSim(p, g)
+                elif self.rb_trap.isChecked():
+                    self.sim = BLDCTrapSim(p, g)
+                else:
+                    self.sim = BLDCSixStepSim(p, g)
             else:
                 self.sim = PMSMSim(p, g)
         if isinstance(self.sim, PMSMSim):
@@ -351,9 +356,18 @@ class MainWindow(QMainWindow):
                 self.t += dt; rpm = omega * 60.0 / (2.0 * 3.141592653589793); last = (self.t, omega, 0.0, i, 0.0, v, Te, abs(v))
                 self._csv_log.append((self.t, omega, rpm, i, 0.0, 0.0, v, Te, abs(v)))
             else:
-                omega, i, v, Te, duty = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
-                self.t += dt; rpm = omega * 60.0 / (2.0 * 3.141592653589793); last = (self.t, omega, 0.0, i, 0.0, v, Te, abs(v))
-                self._csv_log.append((self.t, omega, rpm, i, 0.0, 0.0, v, Te, abs(v)))
+                # BLDCTrapSim or BLDCSixStepSim
+                res = self.sim.step(dt, mode, rpm_target, torque_ref, tload)
+                try:
+                    omega, i, v, Te, duty = res
+                    i_equiv = i; vmag = abs(v)
+                except Exception:
+                    omega, currents, vph, Te, duty = res
+                    ia, ib, ic = currents; va, vb, vc = vph
+                    i_equiv = (abs(ia) + abs(ib) + abs(ic)) / 3.0
+                    vmag = (abs(va) + abs(vb) + abs(vc)) / 3.0
+                self.t += dt; rpm = omega * 60.0 / (2.0 * 3.141592653589793); last = (self.t, omega, 0.0, i_equiv, 0.0, vmag, Te, vmag)
+                self._csv_log.append((self.t, omega, rpm, i_equiv, 0.0, 0.0, vmag, Te, vmag))
         if last is not None:
             t, omega, id_or0, iq_or_i, vd_or0, vq_or_v, Te, vmag = last; rpm = omega * 60.0 / (2.0 * 3.141592653589793)
             self.plot.append(t, rpm, iq_or_i, Te, vmag)
