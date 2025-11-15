@@ -22,8 +22,11 @@ Run Qt UI:
 - Edit targets, motor params (R, L≈Ld=Lq, Kt, pole pairs p), and run.
 
 Realtime UI:
-- `python realtime_ui.py` for live simulation and plotting (Qt + Matplotlib).
+- `python realtime_ui.py` for live simulation and plotting.
+  - Plotting: uses `pyqtgraph` (fast) if available, else falls back to `matplotlib`.
   - Controls: start/pause/reset, speed/torque mode, d‑axis current, load torque.
+  - FOC gains: tune Speed/Id/Iq PI gains directly in the UI.
+  - Presets: save/load motor and gain profiles as JSON.
   - Update rate set by "UI period"; plant integrates at smaller dt.
 
 ## Output
@@ -39,6 +42,7 @@ Realtime UI:
 - Gains in `motor_sim.py` are conservative; tune `spd_pi`, `id_pi`, `iq_pi` for your motor.
 - For SPMSM, Ld≈Lq; set `id_ref = 0`. For IPMSM, set Ld≠Lq and experiment with negative `id_ref`.
 - Voltage is limited to `Vbus/√3` to mimic sine/SVPWM fundamental.
+ - Realtime UI: install `pyqtgraph` for smooth plots (`pip install pyqtgraph`).
 
 ## Repo Structure
 - `motor_sim.py` (offline sim), `qt_ui.py` (batch UI), `realtime_ui.py` (live UI)

@@ -37,16 +37,21 @@ except Exception:
     from PyQt5 import QtCore  # type: ignore
     PYSIDE = False
 
-# Matplotlib (optional)
+# Plotting: prefer pyqtgraph for smooth realtime; fallback to matplotlib
+HAS_PG = False
 HAS_MPL = False
 try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-    HAS_MPL = True
+    import pyqtgraph as pg  # type: ignore
+    HAS_PG = True
 except Exception:
-    HAS_MPL = False
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+        HAS_MPL = True
+    except Exception:
+        HAS_MPL = False
 
 from control import MotorParams, Gains, PMSMSim
 
@@ -55,7 +60,18 @@ class LivePlot(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        if HAS_MPL:
+        self.tdata = []
+        self.rpm = []
+        self.iq = []
+        if HAS_PG:
+            pg.setConfigOptions(antialias=True)
+            self.plot_rpm = pg.PlotWidget(title="speed [rpm]")
+            self.plot_iq = pg.PlotWidget(title="i_q [A]")
+            self.cur_rpm = self.plot_rpm.plot([], [], pen=pg.mkPen('y', width=2))
+            self.cur_iq = self.plot_iq.plot([], [], pen=pg.mkPen('c', width=2))
+            layout.addWidget(self.plot_rpm)
+            layout.addWidget(self.plot_iq)
+        elif HAS_MPL:
             try:
                 matplotlib.use("Qt5Agg")
             except Exception:
@@ -63,20 +79,16 @@ class LivePlot(QWidget):
             self.fig, self.ax = plt.subplots(2, 1, figsize=(6, 5), constrained_layout=True)
             self.canvas = FigureCanvas(self.fig)
             layout.addWidget(self.canvas)
-            # Lines
-            self.tdata = []
-            self.rpm = []
-            self.iq = []
             (self.l_rpm,) = self.ax[0].plot([], [], label="speed [rpm]")
             self.ax[0].set_xlabel("t [s]"); self.ax[0].set_ylabel("rpm"); self.ax[0].grid(True); self.ax[0].legend()
             (self.l_iq,) = self.ax[1].plot([], [], color="tab:red", label="i_q [A]")
             self.ax[1].set_xlabel("t [s]"); self.ax[1].set_ylabel("A"); self.ax[1].grid(True); self.ax[1].legend()
         else:
-            self.msg = QLabel("matplotlib not installed — plotting disabled")
+            self.msg = QLabel("Install pyqtgraph or matplotlib for plots")
             layout.addWidget(self.msg)
 
     def append(self, t: float, rpm: float, iq: float, max_window: float = 10.0):
-        if not HAS_MPL:
+        if not (HAS_PG or HAS_MPL):
             return
         self.tdata.append(t)
         self.rpm.append(rpm)
@@ -84,12 +96,17 @@ class LivePlot(QWidget):
         # Keep a sliding window
         while self.tdata and (self.tdata[-1] - self.tdata[0]) > max_window:
             self.tdata.pop(0); self.rpm.pop(0); self.iq.pop(0)
-        self.l_rpm.set_data(self.tdata, self.rpm)
-        self.l_iq.set_data(self.tdata, self.iq)
-        # Rescale axes
-        for ax in self.ax:
-            ax.relim(); ax.autoscale_view()
-        self.canvas.draw_idle()
+        if HAS_PG:
+            self.cur_rpm.setData(self.tdata, self.rpm)
+            self.cur_iq.setData(self.tdata, self.iq)
+            self.plot_rpm.enableAutoRange()
+            self.plot_iq.enableAutoRange()
+        elif HAS_MPL:
+            self.l_rpm.set_data(self.tdata, self.rpm)
+            self.l_iq.set_data(self.tdata, self.iq)
+            for ax in self.ax:
+                ax.relim(); ax.autoscale_view()
+            self.canvas.draw_idle()
 
 
 class MainWindow(QMainWindow):
@@ -127,6 +144,18 @@ class MainWindow(QMainWindow):
         ]:
             mform.addRow(label, w)
 
+        # Gains box
+        gains_box = QGroupBox("FOC Gains (PI)")
+        gform = QFormLayout(gains_box)
+        self.spin_spd_kp = QDoubleSpinBox(); self.spin_spd_kp.setRange(0.0, 1000.0); self.spin_spd_kp.setDecimals(4); self.spin_spd_kp.setValue(0.01)
+        self.spin_spd_ki = QDoubleSpinBox(); self.spin_spd_ki.setRange(0.0, 5000.0); self.spin_spd_ki.setDecimals(4); self.spin_spd_ki.setValue(2.0)
+        self.spin_id_kp = QDoubleSpinBox(); self.spin_id_kp.setRange(0.0, 1000.0); self.spin_id_kp.setDecimals(4); self.spin_id_kp.setValue(0.8)
+        self.spin_id_ki = QDoubleSpinBox(); self.spin_id_ki.setRange(0.0, 5000.0); self.spin_id_ki.setDecimals(4); self.spin_id_ki.setValue(120.0)
+        self.spin_iq_kp = QDoubleSpinBox(); self.spin_iq_kp.setRange(0.0, 1000.0); self.spin_iq_kp.setDecimals(4); self.spin_iq_kp.setValue(0.8)
+        self.spin_iq_ki = QDoubleSpinBox(); self.spin_iq_ki.setRange(0.0, 5000.0); self.spin_iq_ki.setDecimals(4); self.spin_iq_ki.setValue(120.0)
+        for label, w in [("Speed Kp", self.spin_spd_kp), ("Speed Ki", self.spin_spd_ki), ("Id Kp", self.spin_id_kp), ("Id Ki", self.spin_id_ki), ("Iq Kp", self.spin_iq_kp), ("Iq Ki", self.spin_iq_ki)]:
+            gform.addRow(label, w)
+
         # Mode selector via buttons
         self.btn_speed = QtWidgets.QRadioButton("Speed Mode"); self.btn_speed.setChecked(True)
         self.btn_torque = QtWidgets.QRadioButton("Torque Mode")
@@ -147,7 +176,11 @@ class MainWindow(QMainWindow):
 
         self.plot = LivePlot()
 
-        left = QVBoxLayout(); left.addLayout(form); left.addWidget(motor_box); left.addLayout(row); left.addWidget(self.lbl)
+        # Preset buttons
+        self.btn_save_preset = QPushButton("Save Preset…"); self.btn_load_preset = QPushButton("Load Preset…")
+        preset_row = QHBoxLayout(); preset_row.addWidget(self.btn_save_preset); preset_row.addWidget(self.btn_load_preset)
+
+        left = QVBoxLayout(); left.addLayout(form); left.addWidget(motor_box); left.addWidget(gains_box); left.addLayout(row); left.addLayout(preset_row); left.addWidget(self.lbl)
         root = QHBoxLayout(cw); root.addLayout(left, 0); root.addWidget(self.plot, 1)
 
         # Simulation objects
@@ -164,6 +197,8 @@ class MainWindow(QMainWindow):
         self.btn_pause.clicked.connect(self.on_pause)
         self.btn_reset.clicked.connect(self.on_reset)
         self.btn_export.clicked.connect(self.on_export)
+        self.btn_save_preset.clicked.connect(self.on_save_preset)
+        self.btn_load_preset.clicked.connect(self.on_load_preset)
 
     def build_params(self) -> tuple[MotorParams, Gains]:
         p = MotorParams(
@@ -171,7 +206,11 @@ class MainWindow(QMainWindow):
             Kt=self.spin_Kt.value(), p=int(self.spin_p.value()), J=self.spin_J.value(),
             B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value(),
         )
-        g = Gains()
+        g = Gains(
+            spd_kp=self.spin_spd_kp.value(), spd_ki=self.spin_spd_ki.value(),
+            id_kp=self.spin_id_kp.value(), id_ki=self.spin_id_ki.value(),
+            iq_kp=self.spin_iq_kp.value(), iq_ki=self.spin_iq_ki.value(),
+        )
         return p, g
 
     def on_start(self):
@@ -217,6 +256,69 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.information(self, "Export CSV", f"Saved: {path}")
 
+    def _preset_dict(self):
+        return {
+            "motor": {
+                "R": self.spin_R.value(), "Ld": self.spin_Ld.value(), "Lq": self.spin_Lq.value(),
+                "Kt": self.spin_Kt.value(), "p": int(self.spin_p.value()), "J": self.spin_J.value(),
+                "B": self.spin_B.value(), "Vbus": self.spin_V.value(), "Imax": self.spin_Imax.value(),
+            },
+            "gains": {
+                "spd_kp": self.spin_spd_kp.value(), "spd_ki": self.spin_spd_ki.value(),
+                "id_kp": self.spin_id_kp.value(), "id_ki": self.spin_id_ki.value(),
+                "iq_kp": self.spin_iq_kp.value(), "iq_ki": self.spin_iq_ki.value(),
+            },
+            "targets": {
+                "rpm": self.spin_rpm.value(), "torque": self.spin_torque.value(),
+                "id_ref": self.spin_idref.value(),
+            },
+        }
+
+    def on_save_preset(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Preset", "motor_preset.json", "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            import json
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._preset_dict(), f, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "Save preset error", str(e))
+
+    def on_load_preset(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Preset", "", "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            m = d.get("motor", {})
+            self.spin_R.setValue(float(m.get("R", self.spin_R.value())))
+            self.spin_Ld.setValue(float(m.get("Ld", self.spin_Ld.value())))
+            self.spin_Lq.setValue(float(m.get("Lq", self.spin_Lq.value())))
+            self.spin_Kt.setValue(float(m.get("Kt", self.spin_Kt.value())))
+            self.spin_p.setValue(int(m.get("p", int(self.spin_p.value()))))
+            self.spin_J.setValue(float(m.get("J", self.spin_J.value())))
+            self.spin_B.setValue(float(m.get("B", self.spin_B.value())))
+            self.spin_V.setValue(float(m.get("Vbus", self.spin_V.value())))
+            self.spin_Imax.setValue(float(m.get("Imax", self.spin_Imax.value())))
+
+            g = d.get("gains", {})
+            self.spin_spd_kp.setValue(float(g.get("spd_kp", self.spin_spd_kp.value())))
+            self.spin_spd_ki.setValue(float(g.get("spd_ki", self.spin_spd_ki.value())))
+            self.spin_id_kp.setValue(float(g.get("id_kp", self.spin_id_kp.value())))
+            self.spin_id_ki.setValue(float(g.get("id_ki", self.spin_id_ki.value())))
+            self.spin_iq_kp.setValue(float(g.get("iq_kp", self.spin_iq_kp.value())))
+            self.spin_iq_ki.setValue(float(g.get("iq_ki", self.spin_iq_ki.value())))
+
+            t = d.get("targets", {})
+            self.spin_rpm.setValue(float(t.get("rpm", self.spin_rpm.value())))
+            self.spin_torque.setValue(float(t.get("torque", self.spin_torque.value())))
+            self.spin_idref.setValue(float(t.get("id_ref", self.spin_idref.value())))
+        except Exception as e:
+            QMessageBox.critical(self, "Load preset error", str(e))
+
     def on_tick(self):
         if not self.running or self.sim is None:
             return
@@ -251,4 +353,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
