@@ -12,6 +12,7 @@ class MotorParamsBLDC:
     L: float = 0.0002
     Kt: float = 0.06         # N·m/A
     Ke: float = 0.06         # V·s/rad
+    p: int = 4               # pole pairs (for electrical speed)
     J: float = 2.0e-4
     B: float = 1.0e-4
     Vbus: float = 24.0
@@ -87,11 +88,31 @@ class BLDCTrapSim:
         self.i = 0.0
         self.omega = 0.0
         self.pi_spd = PI(self.g.spd_kp, self.g.spd_ki, -1.0, 1.0)  # output as duty
+        self.theta_e = 0.0  # electrical angle [rad]
 
     def reset(self):
         self.i = 0.0
         self.omega = 0.0
         self.pi_spd.reset()
+
+    def _emf_norm(self, theta: float) -> float:
+        """Trapezoidal back-EMF normalized to [-1,1] for a single effective phase.
+        0..pi/6: ramp 0->1, pi/6..5pi/6: 1, 5pi/6..7pi/6: ramp 1->-1,
+        7pi/6..11pi/6: -1, 11pi/6..2pi: ramp -1->0
+        """
+        import math
+        th = theta % (2.0 * math.pi)
+        pi = math.pi
+        if 0.0 <= th < pi/6:
+            return th / (pi/6)
+        if pi/6 <= th < 5*pi/6:
+            return 1.0
+        if 5*pi/6 <= th < 7*pi/6:
+            return 1.0 - 2.0 * (th - 5*pi/6) / (pi/3)
+        if 7*pi/6 <= th < 11*pi/6:
+            return -1.0
+        # 11pi/6 .. 2pi
+        return -1.0 + (th - 11*pi/6) / (pi/6)
 
     def step(self, dt: float, mode: str, rpm_target: float, torque_ref: float, t_load: float):
         # Duty command
@@ -108,8 +129,13 @@ class BLDCTrapSim:
 
         v = duty * self.p.Vbus
 
+        # Electrical angle update
+        omega_e = self.p.p * self.omega
+        self.theta_e = (self.theta_e + omega_e * dt) % (2.0 * 3.141592653589793)
+        e_norm = self._emf_norm(self.theta_e)
+
         # Electrical dynamics
-        di_dt = (v - self.p.Ke * self.omega - self.p.R * self.i) / self.p.L
+        di_dt = (v - self.p.Ke * self.omega * e_norm - self.p.R * self.i) / self.p.L
         self.i += di_dt * dt
 
         # Mechanical

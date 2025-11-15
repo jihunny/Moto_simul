@@ -211,7 +211,7 @@ class MainWindow(QMainWindow):
 
     def build_params(self):
         if self.rb_bldc.isChecked():
-            p = MotorParamsBLDC(R=self.spin_R.value(), L=self.spin_Ld.value(), Kt=self.spin_Kt.value(), Ke=self.spin_Ke_bldc.value(), J=self.spin_J.value(), B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value())
+            p = MotorParamsBLDC(R=self.spin_R.value(), L=self.spin_Ld.value(), Kt=self.spin_Kt.value(), Ke=self.spin_Ke_bldc.value(), p=int(self.spin_p.value()), J=self.spin_J.value(), B=self.spin_B.value(), Vbus=self.spin_V.value(), Imax=self.spin_Imax.value())
             g = GainsBLDC(spd_kp=self.spin_spd_kp.value(), spd_ki=self.spin_spd_ki.value(), cur_kp=self.spin_id_kp.value(), cur_ki=self.spin_id_ki.value())
             return p, g
         else:
@@ -369,4 +369,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
